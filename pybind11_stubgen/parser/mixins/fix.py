@@ -635,22 +635,26 @@ class FixNumpyArrayDimTypeVar(IParser):
     __array_names: set[QualifiedName] = {QualifiedName.from_str("numpy.ndarray")}
     numpy_primitive_types = FixNumpyArrayDimAnnotation.numpy_primitive_types
 
-    __DIM_VARS: set[str] = set()
+    __MODULE_STACK: list[types.ModuleType] = []
+    __DIM_VARS: dict[types.ModuleType, set[str]] = dict()
 
     def handle_module(
         self, path: QualifiedName, module: types.ModuleType
     ) -> Module | None:
+        self.__MODULE_STACK.append(module)
+        self.__DIM_VARS[module]: set[str] = set()
+
         result = super().handle_module(path, module)
         if result is None:
             return None
 
-        if self.__DIM_VARS:
+        if self.__DIM_VARS[module]:
             # the TypeVar_'s generated code will reference `typing`
             result.imports.add(
                 Import(name=None, origin=QualifiedName.from_str("typing"))
             )
 
-            for name in self.__DIM_VARS:
+            for name in self.__DIM_VARS[module]:
                 result.type_vars.append(
                     TypeVar_(
                         name=Identifier(name),
@@ -658,7 +662,8 @@ class FixNumpyArrayDimTypeVar(IParser):
                     ),
                 )
 
-        self.__DIM_VARS.clear()
+        del self.__DIM_VARS[module]
+        self.__MODULE_STACK.pop()
 
         return result
 
@@ -678,7 +683,7 @@ class FixNumpyArrayDimTypeVar(IParser):
         # handle unqualified, single-letter annotation as a TypeVar
         if len(result.name) == 1 and len(result.name[0]) == 1:
             result.name = QualifiedName.from_str(result.name[0].upper())
-            self.__DIM_VARS.add(result.name[0])
+            self.__DIM_VARS[self.__current_module].add(result.name[0])
 
         if result.name not in self.__array_names:
             return result
@@ -756,11 +761,16 @@ class FixNumpyArrayDimTypeVar(IParser):
             result.append(dim)
         return result
 
+    @property
+    def __current_module(self) -> types.ModuleType | None:
+        if self.__MODULE_STACK:
+            return self.__MODULE_STACK[-1]
+
     def report_error(self, error: ParserError) -> None:
         if (
             isinstance(error, NameResolutionError)
             and len(error.name) == 1
-            and error.name[0] in self.__DIM_VARS
+            and error.name[0] in self.__DIM_VARS[self.__current_module]
         ):
             # allow type variables, which are manually resolved in `handle_module`
             return
