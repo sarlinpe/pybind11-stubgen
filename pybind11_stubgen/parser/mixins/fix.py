@@ -249,7 +249,7 @@ class FixMissing__all__Attribute(IParser):
                                 for import_ in result.imports
                                 if import_.name is not None
                             ),
-                            *(sub_module.name for sub_module in result.sub_modules),
+                            #*(sub_module.name for sub_module in result.sub_modules),
                         ),
                     ),
                 )
