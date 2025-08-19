@@ -816,22 +816,26 @@ class FixNumpyArrayDimAnnotation(IParser):
 
 
 class FixNumpyArrayDimTypeVar(IParser):
-    __DIM_VARS: set[str] = set()
+    __MODULE_STACK: list[types.ModuleType] = []
+    __DIM_VARS: dict[types.ModuleType, set[str]] = dict()
 
     def handle_module(
         self, path: QualifiedName, module: types.ModuleType
     ) -> Module | None:
+        self.__MODULE_STACK.append(module)
+        self.__DIM_VARS[module]: set[str] = set()
+
         result = super().handle_module(path, module)
         if result is None:
             return None
 
-        if self.__DIM_VARS:
+        if self.__DIM_VARS[module]:
             # the TypeVar_'s generated code will reference `typing`
             result.imports.add(
                 Import(name=None, origin=QualifiedName.from_str("typing"))
             )
 
-            for name in self.__DIM_VARS:
+            for name in self.__DIM_VARS[module]:
                 result.type_vars.append(
                     TypeVar_(
                         name=Identifier(name),
@@ -839,7 +843,8 @@ class FixNumpyArrayDimTypeVar(IParser):
                     ),
                 )
 
-        self.__DIM_VARS.clear()
+        del self.__DIM_VARS[module]
+        self.__MODULE_STACK.pop()
         return result
 
     def parse_annotation_str(
@@ -866,18 +871,23 @@ class FixNumpyArrayDimTypeVar(IParser):
 
         def on_dynamic_dim(dim: str) -> None:
             if len(dim) == 1:  # Assuming single letter dims are type vars
-                self.__DIM_VARS.add(dim.upper())
+                self.__DIM_VARS[self.__current_module].add(dim.upper())
 
         shape, dtype = numpy_array.to_type_hint(self, on_dynamic_dim)
         return ResolvedType(
             name=QualifiedName.from_str("numpy.ndarray"), parameters=[shape, dtype]
         )
 
+    @property
+    def __current_module(self) -> types.ModuleType | None:
+        if self.__MODULE_STACK:
+            return self.__MODULE_STACK[-1]
+
     def report_error(self, error: ParserError) -> None:
         if (
             isinstance(error, NameResolutionError)
             and len(error.name) == 1
-            and error.name[0] in self.__DIM_VARS
+            and error.name[0] in self.__DIM_VARS[self.__current_module]
         ):
             # allow type variables, which are manually resolved in `handle_module`
             return
